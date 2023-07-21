@@ -1,0 +1,122 @@
+#!/usr/bin/env sh
+
+# SPDX-FileCopyrightText: 2022 Caleb La Grange <thonkpeasant@protonmail.com>
+# SPDX-FileCopyrightText: 2022 Ferass El Hafidi <vitali64pmemail@protonmail.com>
+# SPDX-FileCopyrightText: 2023 Leah Rowe <leah@libreboot.org>
+# SPDX-License-Identifier: GPL-3.0-only
+
+name=""
+revision=""
+location=""
+url=""
+bkup_url=""
+tmp_dir=""
+
+main()
+{
+	if [ -z "${1+x}" ]; then
+		err 'Error: name not set'
+	fi
+
+	name=${1}
+
+	read_config
+	verify_config
+
+	clone_project
+
+	# clean in case of failure
+	rm -rf ${tmp_dir} >/dev/null 2>&1 || exit 1
+}
+
+read_config()
+{
+	awkstr=" /\{.*${name}.*}{/ {flag=1;next} /\}/{flag=0} flag { print }"
+	while read -r line ; do
+		set ${line} >/dev/null 2>&1
+		case ${line} in
+			rev:*)
+			revision=${2}
+			;;
+			loc:*)
+			location=${2}
+			;;
+			url:*)
+			url=${2}
+			;;
+			bkup_url:*)
+			bkup_url=${2}
+			;;
+		esac
+	done << EOF
+	$(eval "awk '${awkstr}' resources/git/revisions")
+EOF
+}
+
+verify_config()
+{
+	if [ -z "${revision+x}" ]; then
+		err 'Error: revision not set'
+	elif [ -z "${location+x}" ]; then
+		err 'Error: location not set'
+	elif [ -z "${url+x}" ]; then
+		err 'Error: url not set'
+	fi
+}
+
+clone_project()
+{
+	tmp_dir=$(mktemp -dt "${name}_XXXXX")
+
+	git clone ${url} ${tmp_dir} || git clone ${bkup_url} ${tmp_dir} \
+			|| err "ERROR: could not download ${name}"
+
+	(
+	cd ${tmp_dir} || exit 1
+	git reset --hard ${revision} || err "Cannot reset revision"
+	)
+
+	patch_project
+
+	if [ -d "${location}" ]; then
+		rm -Rf ${location} || exit 1
+	fi
+	mv ${tmp_dir} ${location} && return 0
+
+	printf "ERROR: Could not copy temp file to destination.\n"
+	err " ${tmp_dir} > ${location} check permissions"
+}
+
+patch_project()
+{
+	patchdir="resources/${name}/patches"
+
+	for patchfile in ${PWD}/${patchdir}/*.patch ; do
+		if [ ! -f "${patchfile}" ]; then
+			continue
+		fi
+		(
+		cd ${tmp_dir} || exit 1
+		git am ${patchfile} || err "Cannot patch project: $name"
+		)
+	done
+}
+
+usage()
+{
+	cat <<- EOF
+	Usage: ./gitclone [name]
+
+	Options:
+	name: Module name as specified in resources/git/revisions
+	EOF
+}
+
+err()
+{
+	printf "${@}\n"
+	usage
+	exit 1
+}
+
+main $@

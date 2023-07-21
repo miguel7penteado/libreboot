@@ -1,0 +1,76 @@
+#!/usr/bin/env sh
+
+#  helper script: build various coreboot utilities
+#
+#	Copyright (C) 2014-2016,2020,2021,2023 Leah Rowe <info@minifree.org>
+#
+#	This program is free software: you can redistribute it and/or modify
+#	it under the terms of the GNU General Public License as published by
+#	the Free Software Foundation, either version 3 of the License, or
+#	(at your option) any later version.
+#
+#	This program is distributed in the hope that it will be useful,
+#	but WITHOUT ANY WARRANTY; without even the implied warranty of
+#	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#	GNU General Public License for more details.
+#
+#	You should have received a copy of the GNU General Public License
+#	along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+[ "x${DEBUG+set}" = 'xset' ] && set -v
+set -u -e
+
+printf "Building coreboot utils\n"
+
+main()
+{
+	if [ $# -gt 0 ]; then
+		for board in "${@}"; do
+			build_for_mainboard ${board} || exit 1
+		done
+	else
+		for boarddir in resources/coreboot/*; do
+			[ ! -d "${boarddir}" ] && continue
+			build_for_mainboard ${boarddir##*/} || exit 1
+		done
+	fi
+}
+
+build_for_mainboard() {
+	board="${1}"
+	[ ! -d "resources/coreboot/${board}" ] && \
+		continue
+	[ ! -f "resources/coreboot/${board}/board.cfg" ] && \
+		continue
+	cbtree="undefined"
+	. "resources/coreboot/${board}/board.cfg" # source
+	if [ "${cbtree}" = "undefined" ]; then
+		printf "build/cbutils: improper cbtree definition for '%s'" \
+				"${board}"
+		return 1
+	fi
+	buildutils "${cbtree}" || return 1
+}
+
+buildutils() {
+	cbtree="${1}"
+	if [ ! -d "coreboot/${cbtree}/" ]; then
+		./download coreboot $cbtree || return 1
+	fi
+	for util in cbfstool ifdtool; do
+		[ -f "cbutils/${cbtree}/${util}" ] \
+			&& continue
+		if [ ! -d "cbutils/${cbtree}" ]; then
+			mkdir -p "cbutils/${cbtree}" || return 1
+		fi
+
+		utildir="coreboot/${cbtree}/util/${util}"
+		make distclean -C "${utildir}" || return 1
+		make -j$(nproc) -C "${utildir}" || return 1
+		mv "${utildir}/${util}" "cbutils/${cbtree}" || return 1
+		make distclean -C "${utildir}" || return 1
+	done
+}
+
+main $@

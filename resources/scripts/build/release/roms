@@ -1,0 +1,180 @@
+#!/usr/bin/env sh
+
+#  helper script: generate release archive (ROM images)
+#
+#	Copyright (C) 2020,2021,2022,2023 Leah Rowe <info@minifree.org>
+#
+#	This program is free software: you can redistribute it and/or modify
+#	it under the terms of the GNU General Public License as published by
+#	the Free Software Foundation, either version 3 of the License, or
+#	(at your option) any later version.
+#
+#	This program is distributed in the hope that it will be useful,
+#	but WITHOUT ANY WARRANTY; without even the implied warranty of
+#	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#	GNU General Public License for more details.
+#
+#	You should have received a copy of the GNU General Public License
+#	along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+[ "x${DEBUG+set}" = 'xset' ] && set -v
+set -u -e
+
+projectname="$(cat projectname)"
+version="version-unknown"
+versiondate="version-date-unknown"
+cbtree="default"
+target=""
+CONFIG_HAVE_MRC=""
+CONFIG_HAVE_ME_BIN=""
+CONFIG_KBC1126_FIRMWARE=""
+ifdtool="cbutils/${cbtree}/ifdtool"
+cbfstool="cbutils/${cbtree}/cbfstool"
+
+main()
+{
+	printf "Building ROM image archives for version %s\n" "${version}"
+
+	init_check
+
+	for romdir in bin/*; do
+		make_archive "${romdir}"
+	done
+
+	printf "\nROM archives available at release/%s/roms/\n\n" "${version}"
+}
+
+init_check()
+{
+	[ -f version ] && \
+		version="$(cat version)"
+	[ -f versiondate ] && \
+		versiondate="$(cat versiondate)"
+	[ ! -d "bin/" ] && \
+		err "no ROMs built yet. exiting"
+	[ ! -d "release/" ] && \
+		mkdir -p release/
+	[ ! -d "release/${version}/" ] && \
+		mkdir -p "release/${version}/"
+	[ -d "release/${version}/roms/" ] && \
+		rm -Rf "release/${version}/roms/"
+	[ ! -d "release/${version}/roms/" ] && \
+		mkdir -p "release/${version}/roms/"
+}
+
+make_archive()
+{
+	romdir=${1}
+	target="${romdir##*/}"
+
+	echo ${target}
+	if [ ! -d "${romdir}/" ]; then
+		continue
+	fi
+
+	CONFIG_HAVE_MRC="y"
+	CONFIG_HAVE_ME_BIN="y"
+	CONFIG_KBC1126_FIRMWARE="y"
+	grep "CONFIG_HAVE_ME_BIN=y" \
+			"resources/coreboot/${target}/config/"* \
+			|| CONFIG_HAVE_ME_BIN="n"
+	grep "CONFIG_HAVE_MRC=y" \
+			"resources/coreboot/${target}/config/"* \
+			|| CONFIG_HAVE_MRC="n"
+	grep "CONFIG_KBC1126_FIRMWARE=y" \
+			"resources/coreboot/${target}/config"/* \
+			|| CONFIG_KBC1126_FIRMWARE="n"
+
+	# remove ME/MRC/EC firmware from ROM images
+	if [ "${CONFIG_HAVE_ME_BIN}" = "y" ] \
+			|| [ "${target}" = "e6400nvidia_4mb" ]; then
+		strip_archive "${romdir}"
+	fi
+
+	printf "Generating release/%s/roms/%s-%s_%s.tar.xz\n" \
+			"${version}" "${projectname}" \
+			"${version}" "${target##*/}"
+	printf "%s\n" "${version}" > "${romdir}/version"
+	printf "%s\n" "${versiondate}" > "${romdir}/versiondate"
+	printf "%s\n" "${projectname}" > "${romdir}/projectname"
+
+	f="release/${version}/roms/${projectname}-${version}_${target##*/}"
+	tar -c "${romdir}/" | xz -9e > "${f}.tar.xz"
+
+	if [ -d "${romdir}_tmp" ]
+	then
+		rm -Rf "${romdir}"
+		mv "${romdir}_tmp" "${romdir}"
+	fi
+}
+
+strip_archive()
+{
+	romdir=${1}
+
+	if [ ! -d coreboot/${cbtree} ]; then
+		./download coreboot ${cbtree} || exit 1
+	fi
+	./build module cbutils ${cbtree} || exit 1
+
+	rm -Rf "${romdir}_tmp" # dirty hack, to reduce disk io later
+	# rather than using /tmp, which might not be tmpfs
+	mkdir "${romdir}_tmp"
+
+	# Hash the rom before removing blobs
+	if [ ! -f "${romdir}/blobhashes" ]; then
+		printf "ROMs must match these hashes after blob insertion:" \
+			> "${romdir}/blobhashes"
+	fi
+	(
+	cd ${romdir} || err "subshell: cd"
+	sha1sum *.rom >> blobhashes || err "subshell: sha1sum"
+	)
+
+	for romfile in "${romdir}"/*.rom
+	do
+		strip_rom_image "${romfile}"
+	done
+}
+
+strip_rom_image()
+{
+	romfile=${1}
+
+	if [ ! -f "${romfile}" ]; then
+		continue
+	fi
+
+	if [ "${CONFIG_HAVE_ME_BIN}" = "y" ]; then
+		${ifdtool} --nuke me "${romfile}" || exit 1
+		mv "${romfile}" "${romdir}_tmp"/
+		mv "${romfile}.new" "${romfile}"
+	fi
+
+	if [ "${CONFIG_HAVE_MRC}" = "y" ]
+	then
+		${cbfstool} "${romfile}" remove -n mrc.bin || exit 1
+		${cbfstool} "${romfile}" print
+	fi
+
+	if [ "${CONFIG_KBC1126_FIRMWARE}" = "y" ]; then
+		${cbfstool} "${romfile}" remove -n ecfw1.bin || exit 1
+		${cbfstool} "${romfile}" remove -n ecfw2.bin || exit 1
+	fi
+
+	# TODO: replace this board-specific hack
+	if [ "${target}" = "e6400nvidia_4mb" ]; then
+		${cbfstool} "${romfile}" remove \
+			-n "pci10de,06eb.rom" \
+			|| exit 1
+	fi
+}
+
+err()
+{
+	printf "%s: %s\n" $0 $1
+	exit 1
+}
+
+main $@

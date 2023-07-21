@@ -1,0 +1,149 @@
+#!/usr/bin/env sh
+
+#
+#  helper script: build coreboot images with various payloads
+#
+#	Copyright (C) 2014,2015,2016,2020,2021,2023 Leah Rowe
+#							<info@minifree.org>
+#	Copyright (C) 2015 Klemens Nanni <contact@autoboot.org>
+#	Copyright (C) 2022 Caleb La Grange <thonkpeasant@protonmail.com>
+#	Copyright (C) 2022 Ferass El Hafidi <vitali64pmemail@protonmail.com>
+#
+#	This program is free software: you can redistribute it and/or modify
+#	it under the terms of the GNU General Public License as published by
+#	the Free Software Foundation, either version 3 of the License, or
+#	(at your option) any later version.
+#
+#	This program is distributed in the hope that it will be useful,
+#	but WITHOUT ANY WARRANTY; without even the implied warranty of
+#	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#	GNU General Public License for more details.
+#
+#	You should have received a copy of the GNU General Public License
+#	along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+# This script assumes that the working directory is the root
+# of git or release archive
+
+[ "x${DEBUG+set}" = 'xset' ] && set -v
+set -u -e
+
+projectname="$(cat projectname)"
+opts=""
+boards=
+firstoption=""
+
+main()
+{
+	if [ $# -lt 1 ]; then
+		usage
+		exit 1
+	fi
+	firstoption="${1}"
+
+	if [ "${firstoption}" = "help" ]; then
+		usage
+		exit 0
+	fi
+	if [ "${firstoption}" = "list" ]; then
+		listboards
+		exit 0
+	fi
+
+	while [ $# -gt 0 ]; do
+		case ${1} in
+		-d)
+			opts="${opts} -d ${2}"
+			shift ;;
+		-p)
+			opts="${opts} -p ${2}"
+			shift ;;
+		-k)
+			opts="${opts} -k ${2}"
+			shift ;;
+		*)
+			boards="${boards} ${1} " ;;
+		esac
+		shift
+	done
+
+	if [ -z ${opts+x} ]; then
+		opts=""
+	fi
+
+	printf "Building %s ROM images\n" "${projectname}"
+
+	if [ "${firstoption}" = "all" ]; then
+		for boardname in $(listboards); do
+			buildrom "${boardname}" \
+					|| die "build/roms: error"
+		done
+	else
+		for board in ${boards}; do
+			buildrom "${board}" \
+					|| die "build/roms: error"
+		done
+	fi
+
+	printf "\n\nDone! Your ROMs are in bin/\n\n"
+}
+
+usage()
+{
+	cat <<- EOF
+	USAGE:	./build boot roms boardname
+	To build *all* boards, do this: ./build boot roms all
+	To list *all* boards, do this: ./build boot roms list
+	
+	Optional Flags:
+	-d: displaymode
+	-p: payload
+	-k: keyboard layout
+
+	Example commands:
+		./build boot roms x60
+		./build boot roms x200_8mb x60
+		./build boot roms x60 -p grub -d corebootfb -k usqwerty
+
+	possible values for 'boardname':
+	$(listboards)
+
+	Refer to the ${projectname} documentation for more information.
+	EOF
+}
+
+listboards()
+{
+	for boarddir in resources/coreboot/*; do
+		if [ ! -d "${boarddir}" ]; then
+			continue
+		fi
+		board="${boarddir##resources/coreboot/}"
+		board="${board%/}"
+		printf '%s\n' "${board##*/}"
+	done
+}
+
+# Build ROM images for supported boards
+buildrom() {
+	board="$1"
+
+	# Start by building blobs and placing them in the
+	# coreboot tree only for boards that need them
+	./blobutil download ${board} || exit 1
+
+	if [ -d "resources/coreboot/${board}/" ]; then
+		./build boot roms_helper ${board}${opts}
+	else
+		printf "\nbuild/roms: target not defined: %s\n" ${board}
+		die "Run: ./build boot roms list"
+	fi
+}
+
+die() {
+	printf 'Error: %s\n' "${@}" 1>&2
+	exit 1
+}
+
+main $@

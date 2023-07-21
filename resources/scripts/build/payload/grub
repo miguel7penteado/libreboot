@@ -1,0 +1,98 @@
+#!/usr/bin/env sh
+
+#   generate GRUB ELF files (coreboot payload) and configuration files
+#
+#	Copyright (C) 2014,2015,2020,2021,2023 Leah Rowe <info@minifree.org>
+#
+#	This program is free software: you can redistribute it and/or modify
+#	it under the terms of the GNU General Public License as published by
+#	the Free Software Foundation, either version 3 of the License, or
+#	(at your option) any later version.
+#
+#	This program is distributed in the hope that it will be useful,
+#	but WITHOUT ANY WARRANTY; without even the implied warranty of
+#	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#	GNU General Public License for more details.
+#
+#	You should have received a copy of the GNU General Public License
+#	along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+[ "x${DEBUG+set}" = 'xset' ] && set -v
+set -u -e
+
+grubcfgsdir="resources/grub"
+keymap=""
+
+. "${grubcfgsdir}/modules.list"
+
+main()
+{
+	printf "Creating GRUB payloads and configuration files\n"
+
+	[ ! -d "grub/" ] && \
+		./download grub
+	[ ! -f "grub/grub-mkstandalone" ] && \
+		./build module grub
+	[ ! -d "payload/" ] && \
+		mkdir -p payload/
+	[ ! -d "payload/grub" ] && \
+		mkdir -p payload/grub/
+
+	rm -f payload/grub/*
+
+	# Separate GRUB payload per keymap to save space in ROM.
+
+	for keylayoutfile in ${grubcfgsdir}/keymap/*.gkb; do
+		build_grub_payloads "${keylayoutfile}"
+	done
+
+	printf "Done! Check payload/grub/ to see the files.\n\n"
+}
+
+build_grub_payloads()
+{
+	keylayoutfile=${1}
+
+	if [ ! -f "${keylayoutfile}" ]; then
+		continue
+	fi
+	keymap="${keylayoutfile##${grubcfgsdir}/keymap/}"
+	keymap="${keymap%.gkb}"
+
+	build_grub_elf "${keylayoutfile}"
+	create_grub_config
+
+	printf "Created 'payload/grub/grub_%s.elf' and configs.'\n" \
+			"${keymap}"
+}
+
+build_grub_elf()
+{
+	keylayoutfile=${1}
+
+	gcfg="/boot/grub/grub.cfg=${grubcfgsdir}"
+	gcfg="${gcfg}/config/grub_memdisk.cfg"
+	grubk="/boot/grub/layouts/${keymap}.gkb=${keylayoutfile}"
+	grub/grub-mkstandalone \
+			--grub-mkimage="grub/grub-mkimage" \
+			-O i386-coreboot \
+			-o payload/grub/grub_${keymap}.elf \
+			-d grub/grub-core/ \
+			--fonts= --themes= --locales=  \
+			--modules="${grub_modules}" \
+			--install-modules="${grub_install_modules}" \
+			${gcfg} ${grubk}
+}
+
+create_grub_config()
+{
+	sed "s/usqwerty/${keymap}/" \
+			< ${grubcfgsdir}/config/grub.cfg \
+			> payload/grub/grub_${keymap}.cfg
+	sed "s/grubtest.cfg/grub.cfg/" \
+			< payload/grub/grub_${keymap}.cfg \
+			> payload/grub/grub_${keymap}_test.cfg
+}
+
+main $@

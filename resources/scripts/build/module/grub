@@ -1,0 +1,61 @@
+#!/usr/bin/env sh
+
+#  helper script: builds GRUB2 source code
+#
+#	Copyright (C) 2014, 2015, 2020, 2023 Leah Rowe <info@minifree.org>
+#	Copyright (C) 2015, 2016 Klemens Nanni <contact@autoboot.org>
+#
+#	This program is free software: you can redistribute it and/or modify
+#	it under the terms of the GNU General Public License as published by
+#	the Free Software Foundation, either version 3 of the License, or
+#	(at your option) any later version.
+#
+#	This program is distributed in the hope that it will be useful,
+#	but WITHOUT ANY WARRANTY; without even the implied warranty of
+#	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#	GNU General Public License for more details.
+#
+#	You should have received a copy of the GNU General Public License
+#	along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+[ "x${DEBUG+set}" = 'xset' ] && set -v
+set -u -e
+
+main()
+{
+	printf "Building GRUB\n"
+
+	if [ ! -d "grub/" ]; then
+		./download grub || exit 1
+	fi
+
+	build_grub
+}
+
+build_grub()
+{
+	(
+	cd grub/ || err "cd"
+
+	# clean up first
+	if [ -d Makefile ]; then
+		make distclean || err "make-distclean"
+	fi
+
+	./bootstrap --gnulib-srcdir=gnulib/ --no-git || err "bootstrap"
+
+	# build
+	./autogen.sh || err "autogen"
+	./configure --with-platform=coreboot || err "configure"
+	make -j$(nproc) || err "make"
+	)
+}
+
+err()
+{
+	printf "%s: error: %s\n" $0 $1
+	exit 1
+}
+
+main $@
